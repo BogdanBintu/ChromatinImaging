@@ -57,7 +57,7 @@ def set_diag(im,value=np.nan):
     for i in range(len(im_)):
         im_[i,i]=value
     return im_
-def load_HIC(fl = r'C:\Users\Bogdan\juicebox\IMR90Norm2',min_chr = 29372319,max_chr = 30602321,res =30000):
+def load_HIC(fl = r'C:\Users\Bogdan\juicebox\IMR90Norm',min_chr = 29372319,max_chr = 30602321,res =30000):
     """Given file as downloaded from JuiceBox <fl> in a chromosome, <min_chr>,<max_chr> and resolution <res> this returns a matrix with HiC reads
     #chr21:29372319-30602321 is the main region of interest in hg19
     """
@@ -550,6 +550,28 @@ def StandardBoundaryAnalysis(tags,dic_zxys,gb=1,valley=1,su=10,sl=6,
 
 
 
+## Diffraction-limited/STORM separation score
+def separation_score(xyz1,xyz2,plt_val=False):
+    #xyz1 = np.random.random([10,2])
+    #xyz2= np.random.random([20,2])+0.5
+    c1 = np.nanmedian(xyz1,0)
+    c2 = np.nanmedian(xyz2,0)
+    #c0 = np.nanmean(np.concatenate([xyz1,xyz2],0),0)
+    #c0 = (c1*len(xyz1)+c2*len(xyz2))/(len(xyz1)+len(xyz2))
+    c0=(c1+c2)/2.
+    cdif = c2-c1
+    bad1 =np.sum(np.dot(xyz1-c0,cdif)>0) 
+    bad2 = np.sum(np.dot(xyz2-c0,cdif)<0)
+    bad =(bad1 +bad2)/float(len(xyz1)+len(xyz2))
+
+    if plt_val:
+        x1,y1 = np.array(xyz1).T[:2]
+        x2,y2 = np.array(xyz2).T[:2]
+        plt.plot([c0[0]-(c1-c2)[1]*1,c0[0]+(c1-c2)[1]*1],[c0[1]+(c1-c2)[0]*1,c0[1]-(c1-c2)[0]*1],'k-')
+        plt.plot(x1,y1,'ro')
+        plt.plot(x2,y2,'bo')
+        plt.title('Red bad:'+str(bad1)+', blue bad:'+str(bad2))
+    return 1-bad
 
 ## Loops
 def prob_loops(A1,A2,B1,B2,dist_mat,cut_off=150,nonan=True):
@@ -602,11 +624,8 @@ def get_loopsall(nnodes,dmin = 0):
     loopsall = map(cmb_to_loop_1,cmbs)+map(cmb_to_loop_2,cmbs)
     loopsall = [lp for lp in loopsall if np.abs(lp[0]-lp[1])>dmin and np.abs(lp[3]-lp[2])>dmin]
     return loopsall
-    
 
-    
-
-## For STORM
+## STORM specific functions
 from scipy.spatial.distance import cdist
 def overlap_metric(mlist_cluster1,mlist_cluster2,dist=200,error_tol=0.05,num_cutoff=1,kdtree=False,norm_tag='mean'):
     """Given two lists of mlists compute the overlap fraction"""

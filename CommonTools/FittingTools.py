@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 
 from scipy.ndimage.filters import maximum_filter,minimum_filter,median_filter,gaussian_filter
 from scipy.spatial.distance import cdist,pdist,squareform
+from scipy.optimize import leastsq
 
 def gaussian(height,center_z, center_x, center_y, width_z, width_x, width_y, bk=0):
     """Returns a gaussian function with the given parameters"""
@@ -118,7 +119,7 @@ def fitmultigaussian(data,centers,radius=10,n_approx=10,width_zxy=[1.,1.,1.],min
         err=np.ravel(f-g)
         #print np.mean(err**2)
         return err
-    p, success = scipy.optimize.leastsq(errorfunction, params)
+    p, success = leastsq(errorfunction, params)
     p = np.reshape(p,[len(centers),-1])
     p=np.abs(p)
     #p[:1:4]+=0.5
@@ -137,17 +138,18 @@ def gauss_ker(sig_xyz=[2,2,2],sxyz=16,xyz_disp=[0,0,0]):
     im_ker = np.exp(-np.sum(((xyz-xyz_disp-sxyz/2.)/sig_xyz**2)**2,axis=0)/2.)
     return im_ker
 def add_source(im_,pos=[0,0,0],h=200,sig=[2,2,2]):
+    pos = np.array(pos)+0.5
     im=np.array(im_,dtype=float)
     pos_int = np.array(pos,dtype=int)
     xyz_disp = -pos_int+pos
-    im_ker = gauss_ker(sig_xyz=sig,sxyz=int(np.max(sig)*4),xyz_disp=xyz_disp)
+    im_ker = gauss_ker(sig_xyz=sig,sxyz=int(np.max(sig)*5),xyz_disp=xyz_disp)
     im_ker_sz = np.array(im_ker.shape,dtype=int)
     pos_min = pos_int-im_ker_sz/2
     pos_max = pos_min+im_ker_sz
     im_shape = np.array(im.shape)
     def in_im(pos__):
         pos_=np.array(pos__,dtype=int)
-        pos_[pos_>=im_shape]=im_shape[pos_>=im_shape]-1
+        pos_[pos_>=im_shape]=im_shape[pos_>=im_shape]#-1
         pos_[pos_<0]=0
         return pos_
     pos_min_ = in_im(pos_min)
@@ -211,7 +213,7 @@ def fitsinglegaussian_fixed_width(data,center,radius=5,n_approx=10,width_zxy=[1.
             #err=np.ravel(f-g-g*np.log(f/g))
             err=np.ravel(f-g)
             return err
-        p, success = scipy.optimize.leastsq(errorfunction, params_)
+        p, success = leastsq(errorfunction, params_)
         p=np.abs(p)
         p = np.concatenate([p,width_zxy])
         return  p,success

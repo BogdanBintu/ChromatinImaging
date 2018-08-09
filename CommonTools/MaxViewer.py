@@ -64,8 +64,8 @@ class imshow_mark_3d:
                               markersize=12,markeredgewidth=1,markeredgecolor='y',markerfacecolor='None')
         self.lz,=self.ax2.plot(self.draw_x, self.draw_z, 'o',
                       markersize=12,markeredgewidth=1,markeredgecolor='y',markerfacecolor='None')
-        self.imshow_xy = self.ax1.imshow(self.im_xy,interpolation='nearest',cmap=cm.gray)
-        self.imshow_z = self.ax2.imshow(self.im_z,interpolation='nearest',cmap=cm.gray)
+        self.imshow_xy = self.ax1.imshow(self.im_xy,interpolation='nearest',cmap='gray')
+        self.imshow_z = self.ax2.imshow(self.im_z,interpolation='nearest',cmap='gray')
         
         self.min_,self.max_ = min_max_default
         if self.min_ is None: self.min_ = np.min(self.im_)
@@ -353,12 +353,13 @@ class imshow_mark_3d:
         xyzguess = np.array([z_[keep]-z_min,x_[keep]-x_min,y_[keep]-y_min],dtype=int)
         
         multifit = True
+        #self.fast = True
         if hasattr(self,"fast"):
             if self.fast:
                 self.pfits = fast_local_fit(im,xyzguess.T,radius=radius_fit,width_zxy=[width_z,width_xy,width_xy])
                 multifit = False
         if multifit:
-            self.pfits = fit_seed_points_base(im,xyzguess,width_z=width_z,width_xy=width_xy,radius_fit=radius_fit,n_max_iter = 10,max_dist_th=0.25)
+            self.pfits = fit_seed_points_base(im,xyzguess,width_zxy=[width_z,width_xy,width_xy],radius_fit=radius_fit,n_max_iter = 10,max_dist_th=0.25)
         #pisici
         if len(self.pfits>0):
             self.pfits[:,1:4]+=[[z_min,x_min,y_min]]
@@ -385,7 +386,7 @@ class imshow_mark_3d:
             paramaters=self.paramaters
         else:
             paramaters=self
-        gfilt_size = getattr(paramaters,'gfilt_size',0.75)
+        gfilt_size = getattr(paramaters,'gfilt_size',0.)
         filt_size = getattr(paramaters,'filt_size',3)
         th_seed = getattr(paramaters,'th_seed',150.)
         hot_pix_th = getattr(paramaters,'hot_pix_th',0)
