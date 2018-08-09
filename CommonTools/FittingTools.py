@@ -13,6 +13,18 @@ from scipy.ndimage.filters import maximum_filter,minimum_filter,median_filter,ga
 from scipy.spatial.distance import cdist,pdist,squareform
 from scipy.optimize import leastsq
 
+from AlignmentTools import *
+
+def partition_map(list_,map_):
+    """
+    Inputs
+    takes a list [e1,e2,e3,e4,e5,e6] and a map (a list of indices [0,0,1,0,1,2]).  map can be a list of symbols too. ['aa','aa','bb','aa','bb','cc']
+    Output
+    returns a sorted list of lists, e.g. [[e1, e2,e4],[e3,e5],[e6]]
+    """
+    list__=np.array(list_)
+    map__=np.array(map_)
+    return [list(list__[map__==element]) for element in np.unique(map__)]
 def gaussian(height,center_z, center_x, center_y, width_z, width_x, width_y, bk=0):
     """Returns a gaussian function with the given parameters"""
     width_x = float(width_x)

@@ -4,7 +4,7 @@
 #external packages
 import numpy as np
 import re
-import glob
+import glob,os
 
 ##Reader classes and functions
 # Classes that handles reading STORM movie files.
@@ -216,38 +216,10 @@ def fastaread(fl,force_upper=False):
 
 
 #Stand alone functions
-def get_ims(dax,trans=[0,0,0],minmax_coords=[0,-1,0,-1,0,-1]):
-    imRed = np.swapaxes(DaxReader(dax).loadMap(),1,2)
-    im=imRed[12:-12]
-    zmin,zmax,xmin,xmax,ymin,ymax = np.array(minmax_coords)
-    im_cy3_base = im[2::3]
-    im_cy5_base = im[1::3]
-    im_dapi_base = im[0::3]
-    shape_ = np.max([im_cy3_base.shape,im_cy5_base.shape,im_dapi_base.shape],axis=0)
-    if zmax<0:zmax=shape_[0]
-    if xmax<0:xmax=shape_[1]
-    if ymax<0:ymax=shape_[2]
-    trans_=np.array(np.round(trans),dtype=int)
-    zmin-=trans_[0]
-    zmax-=trans_[0]
-    xmin-=trans_[1]
-    xmax-=trans_[1]
-    ymin-=trans_[2]
-    ymax-=trans_[2]
-    ims=[]
-    for im_ in [im_cy5_base,im_cy3_base,im_dapi_base]:
-        shape_=im_.shape
-        im_base_0 = np.zeros([zmax-zmin,xmax-xmin,ymax-ymin])
-        im_zmin = min(max(zmin,0),shape_[0])
-        im_zmax = min(max(zmax,0),shape_[0])
-        im_xmin = min(max(xmin,0),shape_[1])
-        im_xmax = min(max(xmax,0),shape_[1])
-        im_ymin = min(max(ymin,0),shape_[2])
-        im_ymax = min(max(ymax,0),shape_[2])
-        im_base_0[(im_zmin-zmin):(im_zmax-zmin),(im_xmin-xmin):(im_xmax-xmin),(im_ymin-ymin):(im_ymax-ymin)]=im_[im_zmin:im_zmax,im_xmin:im_xmax,im_ymin:im_ymax]
-        ims.append(im_base_0)
-    return ims
-def hybe_number(hybe_tag):
+
+def hybe_number(hybe_folder):
+    """Give a folder of the type path\H3R9, this returns the hybe number 3"""
+    hybe_tag = os.path.basename(hybe_folder)
     is_letter = [char.isalpha() for char in hybe_tag]
     pos = np.where(is_letter)[0]
     if len(pos)==1:

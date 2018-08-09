@@ -1,7 +1,10 @@
 #Bogdan Bintu
 #Copyright Presidents and Fellows of Harvard College, 2017.
 
-###These are aligment tools for either images or point sets
+import numpy as np
+import glob,os
+
+###These are aligment tools for either 3d/2d images or point sets
 
 ##3d images
 
