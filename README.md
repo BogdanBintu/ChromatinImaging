@@ -6,4 +6,4 @@ The repository contains functions for STORM and difraction-limited imaging analy
 
 The difraction-limited analysis has both MATLAB and python code.
 
-### Currently under construction. The full code will be updated in a few days. (8/7/2018)
+![](https://github.com/BogdanBintu/ChromatinImaging/blob/master/Artwork/STORM_DifractionLimited_3dModels.gif)
