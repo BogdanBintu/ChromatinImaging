@@ -1,143 +1,116 @@
-import fnmatch
+
+#External tools
 from Bio.SeqUtils import MeltingTemp as mt
 import cPickle as pickle
 import numpy as np
 import os,subprocess,time
 
-from LibraryConstruction import fastaread
-from LibraryConstruction import fastawrite
-from LibraryConstruction import constant_zero_dict
+#import tools LibraryTools
+from LibraryTools import fastaread
+from LibraryTools import fastawrite
+from LibraryTools import constant_zero_dict
 
-#import LibraryConstruction as lc
+from LibraryTools import seqrc
+from LibraryTools import OTTable
 
-from LibraryConstruction import seqrc
-from LibraryConstruction import OTTable
-from LibraryConstruction import nt2intblock
-from LibraryConstruction import nt2intblock_rc
+#python functions to convert seq->number
+def seq2Int(seq):
+    dic_conv = {'C':1,'c':1,'G':2,'g':2,'T':3,'t':3}
+    digits = np.array([dic_conv.get(let,0) for let in seq],dtype='uint64')
+    word = len(seq)
+    base = 4**(np.arange(word,dtype='uint64')[::-1])
+    return np.sum(base*digits)
+def seq2Int_rc(seq):
+    dic_conv = {'G':1,'g':1,'C':2,'c':2,'A':3,'a':3}
+    digits = np.array([dic_conv.get(let,0) for let in seq],dtype='uint64')
+    word = len(seq)
+    base = 4**(np.arange(word,dtype='uint64')[::-1])
+    return np.sum(base*digits)
+# Faster (500x) cython functions to convert seq->number. Compiled on a Windows machine. 
+# Recompile on Linux by running in a cell in a jupyter notebook in the current directory: !python C_Tools\setup.py build_ext --inplace
+# If too complicated, comment out line bellow and have patience.
+from seqint import seq2Int,seq2Int_rc
+import scipy.sparse as ss
+import time
+def unique_cts(x):
+    x_=np.array(x,dtype=np.uint16)
+    y = np.bincount(x_)
+    ii = np.nonzero(y)[0]
+    return ii,y[ii]
+class countTable():
+    def __init__(self,word=17,save_file=None):
+        """
+        This constructs sparse array count table using scipy lil_matrix for efficient construction.
+        """
+        self.word = word
+        self.save_file = save_file
+        
+        self.max_size = 4**word
+        self.max_sparse_ind = 2**31#scipy.sparse decided to encoded in indeces in int32. Correct!
+        self.nrows = self.max_size/self.max_sparse_ind
+        self.matrix = ss.csr_matrix((self.nrows,self.max_sparse_ind), dtype=np.uint16)
+        self.ints=[]
+    def save(self):
+        if self.save_file is not None:
+            ss.save_npz(self.save_file, self.matrix)
+    def load(self):
+        if self.save_file is not None:
+            ss.load_npz(self.save_file, self.matrix)
+    def complete(self,verbose=False):
+        """a np.unique is performed on self.ints and the number of occurences for each unique 17mer (clipped to 2^16-1) is recorded in a sparse array self.matrix"""
+        if verbose:
+            start = time.time()
+        pos,cts = np.unique(self.ints,return_counts=True)
+        countTable_values = np.array(np.clip(cts, 0, 2**16-1),dtype='uint16')#clip and recast as uint16
+        if verbose:
+            end=time.time()
+            print 'Time to compute unique and clip:',end-start
+        
+        if verbose:
+            start = time.time()
+        self.matrix = self.matrix.tolil()
+        pos_col = pos/self.max_sparse_ind
+        pos_row = pos-pos_col*self.max_sparse_ind
+        self.matrix[pos_col,pos_row] = countTable_values
+        self.matrix = self.matrix.tocsr()
+        if verbose:
+            end=time.time()
+            print 'Time to update matrix:',end-start
+        
+    def consume(self,sq,verbose=False):
+        """Given a big sequence sq, this breaks in into all contigous subseqs of size <word> and records each occurence in self.ints"""
+        word=self.word
+        if len(sq)>=word:
+            sq_word = [sq[i:i+word] for i in range(len(sq)-word+1)]
+            if verbose:
+                start = time.time()
+            self.ints.extend(map(seq2Int,sq_word))
+            if verbose:
+                end=time.time()
+                print 'Time to compute seq2Int:',end-start
+    def get(self,seq,rc=False):
+        """give an oligo, this breaks it into all contigous subseqs of size <word> and returns the sum of the counts"""
+        word = self.word
+        if len(seq)<len(word):
+            return 0
+        seqs = [seq[i:i+word] for i in range(len(seq)-word+1)]
+        if not rc:
+            ints = np.array(map(seq2Int,seqs),dtype='uint64')
+        else:
+            ints = np.array(map(seq2Int_rc,seqs),dtype='uint64')
+        pos_col = ints/self.max_sparse_ind
+        pos_row = ints-pos_col*self.max_sparse_ind
+        return np.sum(self.matrix[pos_col,pos_row])
 
-def slurm_python(python_file,n=1,N=1,t='0-03:00',p='serial_requeue',mem=32000,
-                 err_file=None,out_file=None,slurm_script=None,job_index=False):
-    "Given python file and slurm specs this launches a python file in sbatch."
-    base_name = python_file.replace('.py','')
-    if job_index: job_str = '_%j'
-    else: job_str = ''
-    if err_file is None: err_file=base_name
-    if out_file is None: out_file=base_name
-    if slurm_script is None: slurm_script = base_name+'.sh'
-    string = """#!/bin/bash
-#SBATCH -n """+str(n)+"""                    # Number of cores
-#SBATCH -N """+str(N)+"""                    # Ensure that all cores are on one machine
-#SBATCH -t """+str(t)+"""              # Runtime in D-HH:MM
-#SBATCH -p """+str(p)+"""       # Partition to submit to
-#SBATCH --mem="""+str(mem)+"""               # Memory pool for all cores (see also --mem-per-cpu)
-#SBATCH -o """+out_file+job_str+""".out      # File to which STDOUT will be written
-#SBATCH -e """+err_file+job_str+""".err      # File to which STDERR will be written
-
-
-. new-modules.sh && module load python/2.7.6-fasrc01 && source activate python27rc
-
-python """+python_file+"""
-"""
-    fid = open(slurm_script,'w')
-    fid.write(string)
-    fid.close()
-    return subprocess.check_output("sbatch "+slurm_script,shell=True)
-def python_scripts(notebook_string,params,save_folder,file_base='script'):
-    "Creates a set of python files in the save_folder with text: notebook_string(params[i])"
-    if not os.path.exists(save_folder):
-        os.makedirs(save_folder)
-    save_files=[]
-    for i,param in enumerate(params):
-        save_file = save_folder+os.sep+file_base+'_param'+str(i)+'.py'
-        save_files.append(save_file)
-        python_script(notebook_string(param),save_file)
-    return save_files
-def python_script(notebook_string_,save_file):
-    fid = open(save_file,'w')
-    fid.write(notebook_string_)
-    fid.close()
-def get_map(map_):
-    map__=[]
-    for elem in map_:
-        if elem not in map__:
-            map__.append(elem)
-    map__=np.array(map__)
-    return map__
-def partition_map(list_,map_,mapU=None,return_map=False):
+def OTmap(seqs,word_size=17,use_kmer=True,progress_report=False,save_file=None):
+    """This creates an count table using either a sparse matrix form or a python dictionary.
+    For large genome-sized tables we recommend the sparse matrix
     """
-    Inputs
-    takes a list [e1,e2,e3,e4,e5,e6] and a map (a list of indices [0,0,1,0,1,2]).  map can be a list of symbols too. ['aa','aa','bb','aa','bb','cc']
-    Output
-    returns a sorted list of lists, e.g. [[e1, e2,e4],[e3,e5],[e6]]
-    """
-    list__=np.array(list_)
-    map__=np.array(map_)
-    if mapU is None:
-        mapU = np.unique(map__)
-    if type(mapU)==str:
-        if mapU=='ordered':
-            mapU=get_map(map_)
-    if return_map:
-        return [list(list__[map__==element]) for element in mapU],list(mapU)
-    return [list(list__[map__==element]) for element in mapU]
-def tm(string):
-    return mt.Tm_NN(string, nn_table=mt.DNA_NN4,Na=330)#330 for 2xSSC
-def gc(string):
-    return float(string.count('g')+string.count('G')+string.count('c')+string.count('C'))/len(string)
-
-def notebook_string(in_file):
-    return """
-#This is an auto generated string
-
-##imports
-import time,os,sys,glob
-import cPickle as pickle
-import numpy as np
-
-import khmer
-sys.path.append(r'/n/dulacfs2/Users/bbintu/python-functions/python-functions-library')
-from LibraryConstruction import fastaread,fastawrite
-import LibraryDesigner as ld
-
-in_file = r'"""+in_file+"""'
-save_file = r'/n/dulacfs2/Users/bbintu/Libraries/SI10/Reports'+os.sep+os.path.basename(in_file).replace('.fasta','.pbr')
-
-transcriptome_fl = r'/n/dulacfs2/Users/bbintu/Transcriptomes/mouse/mm10_rna_word17_.kmer'
-genome_fl = r'/n/dulacfs2/Users/bbintu/Genomes/mouse/mm10/full_word17_.kmer'
-rep_transcriptome_fl = r'/n/dulacfs2/Users/bbintu/Transcriptomes/mouse/rtRNA.fasta'
-rep_genome_fl = r'/n/dulacfs2/Users/bbintu/Genomes/mouse/mm10/repeatSequences.fasta'
-local_genome_fl = r'/n/dulacfs2/Users/bbintu/Genomes/mouse/mm10/chrX_word17_.kmer'
-
-pb_designer = ld.pb_reports_class(
-    sequence_dic={'file':in_file,'use_revc':True,'use_kmer':True},
-    map_dic={'transcriptome':{'file':transcriptome_fl,'use_revc':False,'use_kmer':True},
-          'genome':{'file':genome_fl,'use_revc':True,'use_kmer':True},
-          'rep_transcriptome':{'file':rep_transcriptome_fl,'use_revc':True,'use_kmer':True},
-          'rep_genome':{'file':rep_genome_fl,'use_revc':True,'use_kmer':True},
-          'local_genome':{'file':local_genome_fl,'force_list':True,'use_revc':True,'use_kmer':True}},
-    save_file=save_file,
-    params_dic={'word_size':17,'pb_len':42,'buffer_len':2,'max_count':2**16-1,'check_on_go':False,'auto':False},
-    dic_check={'transcriptome':3,('genome','local_genome'):20,
-                'rep_transcriptome':0,'rep_genome':0,'gc':[0.25,0.75],'tm':70})
-
-pb_designer.computeOTmaps()
-pb_designer.compute_pb_report()
-pb_designer.perform_check_end()
-pb_designer.plots()
-
-"""
-
-
-def OTmap(seqs,word_size=17,use_kmer=True,expt_table_size=1e7,num_tables=4,progress_report=False,save_file=None):
-    "This creates an OTmap"
     if use_kmer:
-        import khmer
-        ksize = word_size
-        map_ = khmer.Countgraph(ksize,expt_table_size,num_tables)
-        map_.set_use_bigcount(True)
+        map_ = countTable(word=word_size)
         print "Mapping no. of seqs: "+str(len(seqs))
         for seq in seqs:
-            map_.consume(seq.upper())
+            map_.consume(seq.upper(),verbose=progress_report)
         if save_file is not None:
             map_.save(save_file)
     else:
@@ -166,6 +139,7 @@ class pb_reports_class:
         #from: http://localhost:8811/notebooks/Chromatin_Multiplex_Notes/Bogdan/SI10-construction.ipynb
         Example full usage with for loop in interact:
         #from: http://localhost:8811/notebooks/Chromatin_Multiplex_Notes/Bogdan/SI10-construction.ipynb
+        
         master_folder  = r'/n/dulacfs2/Users/bbintu/Libraries/SI10/DNA'
         in_files = glob.glob(master_folder+os.sep+'old*.fasta')+glob.glob(master_folder+os.sep+'left*.fasta')
         in_files = in_files[-2:]
@@ -352,40 +326,25 @@ class pb_reports_class:
                 if not force_list:
                     names =[names]
                     seqs = [seqs]
-                OTmaps = [self.OTmap(seq_,expt_table_size=expt_table_size,save_file=save_file,use_kmer=use_kmer)
+                OTmaps = [OTmap(seq_,word_size=17,use_kmer=use_kmer,progress_report=False,save_file=save_file)
                           for seq_ in seqs]
                 setattr(self,map_key,OTmaps)
-            elif len(files_)==1 and self.check_extension(files,'kmer'):
-                import khmer
-                OTmaps = [khmer.load_countgraph(files_[0])]
+            elif len(files_)==1 and self.check_extension(files,'.npz'):
+                OTMap_ = OTmap(seq_,word_size=17)
+                OTMap_.load(files_[0])
+                OTmaps = [OTMap_]
                 setattr(self,map_key,OTmaps)
             elif len(files_)==1 and self.check_extension(files,'pkl'):
                 OTmaps = [pickle.load(open(files_[0],'rb'))]
                 setattr(self,map_key,OTmaps)
             else:
-                print "Extension error or more than 1 kmer/pkl file provided."
+                print "Extension error or more than 1 npz/pkl file provided."
         else:
             print "No files"
             setattr(self,map_key,[constant_zero_dict()])
-    def OTmap(self,seqs,expt_table_size=1e7,progress_report=True,save_file=None,use_kmer=False,num_tables=4):
-        if use_kmer:
-            import khmer
-            ksize = self.word_size
-            map_ = khmer.Countgraph(ksize,expt_table_size , num_tables)
-            map_.set_use_bigcount(True)
-            print "Mapping no. of seqs: "+str(len(seqs))
-            for seq in seqs:
-                map_.consume(seq.upper())
-            if save_file is not None:
-                map_.save(save_file)
-        else:
-            specTable = OTTable()
-            map_ = specTable.computeOTTable(seqs,self.word_size,progress_report=progress_report)
-            if save_file is not None:
-                pickle.dump(map_,open(save_file,'wb'),protocol=pickle.HIGHEST_PROTOCOL)
-        return map_
     def coords_to_seq(self,coord,genome_folder=r'/n/dulacfs2/Users/bbintu/Genomes/mouse/mm10',save_file=None):
         "given coords of form chr*:*-* and a genome folder, returns the sequence and saves to file if save_file not None"
+        import fnmatch
         if fnmatch.fnmatchcase(coord,'chr*:*-*'):
             chr_=coord.split(':')[0]
             if not hasattr(self,'seq_'+chr_):
@@ -480,48 +439,41 @@ class pb_reports_class:
             checks_ = np.zeros(len(reg_t))
             for i in range(len(reg_t)-pb_len):
                 pb_t = reg_t[i:i+pb_len]
-                pb_ts = [pb_t]
-                if input_use_revc:
-                    if input_use_kmer:
-                        import khmer
-                        pb_ts = [pb_t,khmer.reverse_complement(pb_t)]
-                    else:
-                        pb_ts = [pb_t,seqrc(pb_t)]
-                for pb_t in pb_ts:
-                    if checks_[i]==0:
-                        pb_reports[pb_t] = constant_zero_dict()
-                        pb_reports[pb_t].update({'name':gen_names[k]+'_pb_'+str(i),'reg_index':k,'reg_name':gen_names[k],'pb_index':i,'gc':gc(pb_t),'tm':tm(pb_t)})
-                        #Iterate through maps:
-                        for key in self.map_dic.keys():
-                            curr_dic = self.map_dic[key]
-                            use_kmer = curr_dic.get('use_kmer',False)
-                            use_revc = curr_dic.get('use_revc',False)
+                if checks_[i]==0:
+                    pb_reports[pb_t] = constant_zero_dict()
+                    pb_reports[pb_t].update({'name':gen_names[k]+'_pb_'+str(i),'reg_index':k,'reg_name':gen_names[k],'pb_index':i,'gc':gc(pb_t),'tm':tm(pb_t)})
+                    
+                    #Iterate through maps:
+                    for key in self.map_dic.keys():
+                        curr_dic = self.map_dic[key]
+                        use_kmer = curr_dic.get('use_kmer',False)
+                        use_revc = curr_dic.get('use_revc',False)
 
-                            map_key = 'map_'+key
-                            maps=getattr(self,map_key)
-                            if use_kmer:
-                                import khmer
+                        map_key = 'map_'+key
+                        maps=getattr(self,map_key)
+                        
+                        #for python dictionary:
+                        if not use_kmer:
                             #Iterate through block regions:
-                            for j in range(pb_len-block):
+                            for j in range(pb_len-block+1):
                                 blk_t = pb_t[j:j+block]
-                                if not use_kmer:
-                                    if use_revc:
-                                        blk_ints = [nt2intblock(blk_t),nt2intblock_rc(blk_t)]
-                                    else:
-                                        blk_ints = [nt2intblock(blk_t)]
-                                else:
-                                    if use_revc:
-                                        blk_ints = [blk_t,khmer.reverse_complement(blk_t)]#consider using hashes for faster computation
-                                    else :
-                                        blk_ints = [blk_t]
                                 map_=maps[k%len(maps)]
-                                for blk_int in blk_ints:
-                                    #print map_.get(blk_int)
-                                    pb_reports[pb_t][key]+= map_.get(blk_int)
-                        if check_on_go:
-                            if self.perform_check(pb_reports[pb_t]):
-                                checks_[i:i+pb_len+buffer_len]=1
-                                self.pb_reports_keep[pb_t] = pb_reports[pb_t]
+                                blks = [pb_t]
+                                if use_revc:
+                                    blks.append(seqrc(pb_t))
+                                for blk_ in blks:
+                                    pb_reports[pb_t][key]+= int(map_.get(blk_int))
+                                    
+                        #for sparse matrix:
+                        if use_kmer:
+                            if use_revc:
+                                pb_reports[pb_t][key]+= map_.get(pb_t)+map_.get(pb_t,rc=True)
+                            else:
+                                pb_reports[pb_t][key]+= map_.get(pb_t)
+                    if check_on_go:
+                        if self.perform_check(pb_reports[pb_t]):
+                            checks_[i:i+pb_len+buffer_len]=1
+                            self.pb_reports_keep[pb_t] = pb_reports[pb_t]
             self.pb_reports = pb_reports
             self.save_pbr()
             end=time.time()
@@ -535,11 +487,11 @@ class pb_reports_class:
             if not (key in ['gc','tm']):
                 if type(key) is str:
                     off_maps = off_maps and (pb_report[key]<=dic_check[key])
-                    if pb_report[key]>=self.max_count:
+                    if pb_report[key]>=self.max_count-1:
                         off_maps = False
                 elif type(key) in [list,tuple]:
                     off_maps = off_maps and ((pb_report[key[0]]-pb_report[key[1]])<=dic_check[key])
-                    if pb_report[key[0]]>=self.max_count:
+                    if pb_report[key[0]]>=self.max_count-1:
                         off_maps = False
         gc_ch = True
         if dic_check['gc'] is not None:
@@ -628,3 +580,116 @@ class pb_reports_class:
             else:
                 save_file_png=None
             self.single_plot(sz_bin=sz_bin_,region = region,save_file_png=save_file_png,show=show)
+
+## Functions for research computing (cluster) machines operating under SLURM
+def slurm_python(python_file,n=1,N=1,t='0-03:00',p='serial_requeue',mem=32000,
+                 err_file=None,out_file=None,slurm_script=None,job_index=False):
+    "Given python file and slurm specs this launches a python file in sbatch."
+    base_name = python_file.replace('.py','')
+    if job_index: job_str = '_%j'
+    else: job_str = ''
+    if err_file is None: err_file=base_name
+    if out_file is None: out_file=base_name
+    if slurm_script is None: slurm_script = base_name+'.sh'
+    string = """#!/bin/bash
+#SBATCH -n """+str(n)+"""                    # Number of cores
+#SBATCH -N """+str(N)+"""                    # Ensure that all cores are on one machine
+#SBATCH -t """+str(t)+"""              # Runtime in D-HH:MM
+#SBATCH -p """+str(p)+"""       # Partition to submit to
+#SBATCH --mem="""+str(mem)+"""               # Memory pool for all cores (see also --mem-per-cpu)
+#SBATCH -o """+out_file+job_str+""".out      # File to which STDOUT will be written
+#SBATCH -e """+err_file+job_str+""".err      # File to which STDERR will be written
+
+
+. new-modules.sh && module load python/2.7.6-fasrc01 && source activate python27rc
+
+python """+python_file+"""
+"""
+    fid = open(slurm_script,'w')
+    fid.write(string)
+    fid.close()
+    return subprocess.check_output("sbatch "+slurm_script,shell=True)
+def python_scripts(notebook_string,params,save_folder,file_base='script'):
+    "Creates a set of python files in the save_folder with text: notebook_string(params[i])"
+    if not os.path.exists(save_folder):
+        os.makedirs(save_folder)
+    save_files=[]
+    for i,param in enumerate(params):
+        save_file = save_folder+os.sep+file_base+'_param'+str(i)+'.py'
+        save_files.append(save_file)
+        python_script(notebook_string(param),save_file)
+    return save_files
+def python_script(notebook_string_,save_file):
+    fid = open(save_file,'w')
+    fid.write(notebook_string_)
+    fid.close()
+def get_map(map_):
+    map__=[]
+    for elem in map_:
+        if elem not in map__:
+            map__.append(elem)
+    map__=np.array(map__)
+    return map__
+def partition_map(list_,map_,mapU=None,return_map=False):
+    """
+    Inputs
+    takes a list [e1,e2,e3,e4,e5,e6] and a map (a list of indices [0,0,1,0,1,2]).  map can be a list of symbols too. ['aa','aa','bb','aa','bb','cc']
+    Output
+    returns a sorted list of lists, e.g. [[e1, e2,e4],[e3,e5],[e6]]
+    """
+    list__=np.array(list_)
+    map__=np.array(map_)
+    if mapU is None:
+        mapU = np.unique(map__)
+    if type(mapU)==str:
+        if mapU=='ordered':
+            mapU=get_map(map_)
+    if return_map:
+        return [list(list__[map__==element]) for element in mapU],list(mapU)
+    return [list(list__[map__==element]) for element in mapU]
+def tm(string):
+    return mt.Tm_NN(string, nn_table=mt.DNA_NN4,Na=330)#330 for 2xSSC
+def gc(string):
+    return float(string.count('g')+string.count('G')+string.count('c')+string.count('C'))/len(string)
+
+def notebook_string(in_file):
+    return """
+#This is an auto generated string
+
+##imports
+import time,os,sys,glob
+import cPickle as pickle
+import numpy as np
+
+import khmer
+sys.path.append(r'/n/dulacfs2/Users/bbintu/python-functions/python-functions-library')
+from LibraryConstruction import fastaread,fastawrite
+import LibraryDesigner as ld
+
+in_file = r'"""+in_file+"""'
+save_file = r'/n/dulacfs2/Users/bbintu/Libraries/SI10/Reports'+os.sep+os.path.basename(in_file).replace('.fasta','.pbr')
+
+transcriptome_fl = r'/n/dulacfs2/Users/bbintu/Transcriptomes/mouse/mm10_rna_word17_.kmer'
+genome_fl = r'/n/dulacfs2/Users/bbintu/Genomes/mouse/mm10/full_word17_.kmer'
+rep_transcriptome_fl = r'/n/dulacfs2/Users/bbintu/Transcriptomes/mouse/rtRNA.fasta'
+rep_genome_fl = r'/n/dulacfs2/Users/bbintu/Genomes/mouse/mm10/repeatSequences.fasta'
+local_genome_fl = r'/n/dulacfs2/Users/bbintu/Genomes/mouse/mm10/chrX_word17_.kmer'
+
+pb_designer = ld.pb_reports_class(
+    sequence_dic={'file':in_file,'use_revc':True,'use_kmer':True},
+    map_dic={'transcriptome':{'file':transcriptome_fl,'use_revc':False,'use_kmer':True},
+          'genome':{'file':genome_fl,'use_revc':True,'use_kmer':True},
+          'rep_transcriptome':{'file':rep_transcriptome_fl,'use_revc':True,'use_kmer':True},
+          'rep_genome':{'file':rep_genome_fl,'use_revc':True,'use_kmer':True},
+          'local_genome':{'file':local_genome_fl,'force_list':True,'use_revc':True,'use_kmer':True}},
+    save_file=save_file,
+    params_dic={'word_size':17,'pb_len':42,'buffer_len':2,'max_count':2**16-1,'check_on_go':False,'auto':False},
+    dic_check={'transcriptome':3,('genome','local_genome'):20,
+                'rep_transcriptome':0,'rep_genome':0,'gc':[0.25,0.75],'tm':70})
+
+pb_designer.computeOTmaps()
+pb_designer.compute_pb_report()
+pb_designer.perform_check_end()
+pb_designer.plots()
+
+"""
