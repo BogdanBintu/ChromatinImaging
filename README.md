@@ -6,4 +6,6 @@ The repository contains functions for STORM and difraction-limited imaging analy
 
 The difraction-limited analysis has both MATLAB and python code.
 
+The data for this project will be availabe soon on the Zhuang lab website: http://zhuang.harvard.edu/
+
 ![](https://github.com/BogdanBintu/ChromatinImaging/blob/master/Artwork/STORM_DifractionLimited_3dModels.gif)
