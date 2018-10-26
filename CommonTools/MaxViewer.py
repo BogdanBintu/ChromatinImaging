@@ -28,9 +28,9 @@ class imshow_mark_3d:
         """
         #internalize
         self.coloron=False
-        self.ims=ims
-        self.ims_c=ims_c
-        self.rescz = rescz
+        self.ims=ims #gray scale images
+        self.ims_c=ims_c #color images
+        self.rescz = rescz #the resolution in z sometimes is different than in xy
         if image_names is None:
             self.image_names = ['Image '+str(i+1) for i in range(len(ims))]
         else:
@@ -38,8 +38,8 @@ class imshow_mark_3d:
         self.save_file = save_file
         
         #define extra vars
-        self.dic_min_max = {}
-        self.dic_min_max_c = {}
+        self.dic_min_max = {} #kees record of the min-max for adjusting contrast for the grayscale images
+        self.dic_min_max_c = {} #kees record of the min-max for adjusting contrast for the color images
         self.class_ids = []
         self.draw_x,self.draw_y,self.draw_z=[],[],[]
         self.coords = zip(self.draw_x,self.draw_y,self.draw_z)
