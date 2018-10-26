@@ -1,4 +1,7 @@
 
+#Bogdan Bintu
+#Copyright Presidents and Fellows of Harvard College, 2017.
+
 #External tools
 from Bio.SeqUtils import MeltingTemp as mt
 import cPickle as pickle
