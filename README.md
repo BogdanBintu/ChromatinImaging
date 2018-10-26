@@ -5,7 +5,7 @@ Repository for scripts and functions used for the super-resolution chromatin tra
 
 The repository contains functions for STORM and difraction-limited imaging analysis.
 
-The difraction-limited analysis has both MATLAB and python code.
+The difraction-limited analysis has both MATLAB and python 2.7 code.
 
 The data for this project is in the Data subfolder of this repository.
 
