@@ -63,6 +63,8 @@ Thus for the first region (chr21:28Mb-30Mb ) the 1st,2nd... segments are approxi
 
 ### Note on imaging data:
 
-The nan's in the imaging data (~90-95% of the positions in a given cell) correspond to "dim" spots that are of comparable brightness with the background fluctuations and were consequently removed. 
+The nan's in the imaging data (~5-10% of the positions in a given cell) correspond to "dim" spots that are of comparable brightness with the background fluctuations and were consequently removed. 
+We found in practice that removing this percentage of low confidence/precision which occurs stochastically does not affect computing the average or the median inter-distances or even the domain boundary calling in which the nan's were simply not included in the analyis.
+Similarly the "contact fractions" were computed relative to the number of total observations of each pair of chromatin segments, not relative to the total number of chromosomes.
 
 (See the example images and example analysis code on the sample data for a better understanding of the raw data: https://github.com/BogdanBintu/ChromatinImaging/blob/master/Difraction-limited_ImageAnalysis/StandardAnalysis.ipynb)
