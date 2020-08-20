@@ -1,7 +1,4 @@
 
-#Bogdan Bintu
-#Copyright Presidents and Fellows of Harvard College, 2017.
-
 #External tools
 from Bio.SeqUtils import MeltingTemp as mt
 import cPickle as pickle
@@ -33,6 +30,7 @@ def seq2Int_rc(seq):
 # Recompile on Linux by running in a cell in a jupyter notebook in the current directory: !python C_Tools\setup.py build_ext --inplace
 # If too complicated, comment out line bellow and have patience.
 from seqint import seq2Int,seq2Int_rc
+
 import scipy.sparse as ss
 import time
 def unique_cts(x):
@@ -40,29 +38,54 @@ def unique_cts(x):
     y = np.bincount(x_)
     ii = np.nonzero(y)[0]
     return ii,y[ii]
+def get_random_sequence(n):
+    agtc='AGTC'
+    seq=''
+    for i in range(n):
+        seq+=agtc[np.random.randint(4)]
+    return seq
 class countTable():
-    def __init__(self,word=17,save_file=None):
+    def __init__(self,word=17,sparse=True,save_file=None,fromfile=False,verbose=False):
         """
         This constructs sparse array count table using scipy lil_matrix for efficient construction.
         """
         self.word = word
+        self.verbose = verbose
         self.save_file = save_file
-        
+        self.sparse = sparse
         self.max_size = 4**word
-        self.max_sparse_ind = 2**31#scipy.sparse decided to encoded in indeces in int32. Correct!
-        self.nrows = self.max_size/self.max_sparse_ind
-        self.matrix = ss.csr_matrix((self.nrows,self.max_sparse_ind), dtype=np.uint16)
+        self.fromfile=fromfile
+        self.f=None
+        self.matrix=[]
         self.ints=[]
+        self.seqs,self.names = [],[]
+    def create_matrix(self):
+        if self.sparse:
+            self.max_sparse_ind = 2**31#scipy.sparse decided to encoded in indeces in int32. Correct!
+            self.nrows = int(self.max_size/self.max_sparse_ind)
+            if self.nrows>0:
+                self.matrix = ss.csr_matrix((self.nrows,self.max_sparse_ind), dtype=np.uint16)
+            else:
+                self.matrix = ss.csr_matrix((1,self.max_size), dtype=np.uint16)
+        else:
+            self.matrix = np.zeros(self.max_size,dtype=np.uint16)
     def save(self):
         if self.save_file is not None:
-            ss.save_npz(self.save_file, self.matrix)
+            if self.sparse:
+                ss.save_npz(self.save_file, self.matrix)
+            else:
+                self.matrix.tofile(self.save_file)
     def load(self):
         if self.save_file is not None:
-            ss.load_npz(self.save_file, self.matrix)
+            if self.sparse:
+                ss.load_npz(self.save_file, self.matrix)
+            else:
+                self.matrix = np.fromfile(self.save_file,dtype=np.uint16)
     def complete(self,verbose=False):
         """a np.unique is performed on self.ints and the number of occurences for each unique 17mer (clipped to 2^16-1) is recorded in a sparse array self.matrix"""
         if verbose:
             start = time.time()
+        self.create_matrix()
         pos,cts = np.unique(self.ints,return_counts=True)
         countTable_values = np.array(np.clip(cts, 0, 2**16-1),dtype='uint16')#clip and recast as uint16
         if verbose:
@@ -71,15 +94,77 @@ class countTable():
         
         if verbose:
             start = time.time()
-        self.matrix = self.matrix.tolil()
-        pos_col = pos/self.max_sparse_ind
-        pos_row = pos-pos_col*self.max_sparse_ind
-        self.matrix[pos_col,pos_row] = countTable_values
-        self.matrix = self.matrix.tocsr()
+        if self.sparse:
+            self.matrix = self.matrix.tolil()
+            if self.max_sparse_ind<=self.max_size:
+                pos_col = pos/self.max_sparse_ind
+                pos_row = pos-pos_col*self.max_sparse_ind
+                self.matrix[pos_col,pos_row] = countTable_values
+            else:
+                self.matrix[0,pos] = countTable_values
+            self.matrix = self.matrix.tocsr()
+        else:
+            self.matrix[pos]=countTable_values
         if verbose:
             end=time.time()
             print 'Time to update matrix:',end-start
+    def read(self,files):
+        """Read fasta files and store the names and seqs in self.names, self.seqs"""
+        if type(files) is str:
+            files = [files]
+        self.seqs,self.names = [],[]
+        for fl in files:
+            nms,sqs = fastaread(fl)
+            sqs = [sq.upper() for sq in sqs]
+            self.names.extend(nms)
+            self.seqs.extend(sqs)
+    def consume_batch(self,batch=1000000,reset=False):
+        """Having self.seqs,self.names this updates the self.matrix with size 4**word and counts capped up to 2**16"""
+        self.matrix = np.zeros(self.max_size,dtype=np.uint16)
+        word= self.word
+        for nm,sq in zip(self.names,self.seqs):
+            for isq in range(int(len(sq)/batch)+1):
+                if self.verbose:
+                    print nm+'_batch:'+str(isq)
+                sq_ = sq[isq*batch:(isq+1)*batch]
+                sq_word = [sq_[i:i+word] for i in range(len(sq_)-word)]
+                if len(sq_word)>0:
+                    ints = list(map(seq2Int,sq_word))
+                    pos,cts = np.unique(ints,return_counts=True)
+                    self.pos,self.cts = pos,cts
+                    ints_vals = np.array(self.matrix[pos],dtype='uint64')
+                    ints_vals_ = np.array(np.clip(ints_vals+cts, 0, 2**16-1),dtype='uint16')
+                    self.matrix[pos] = ints_vals_
+    def consume_batch_file(self,batch=1000000,reset=False):
+        assert(self.save_file is not None)
+        if reset:
+            #create the file with 0s
+            f = open(self.save_file,"wb")
+            f.seek(4**self.word*2-1)
+            f.write(b"\0")
+            f.close()
         
+        f = open(self.save_file, "r+b")
+        word= self.word
+        for nm,sq in zip(self.names,self.seqs):
+            
+            for isq in range(int(len(sq)/batch)+1):
+                sq_ = sq[isq*batch:(isq+1)*batch]
+                sq_word = [sq_[i:i+word] for i in range(len(sq_)-word)]
+                ints = list(map(seq2Int,sq_word))
+                pos,cts = np.unique(ints,return_counts=True)
+                ints_vals = []
+                for pos_,ct_ in zip(pos,cts):
+                    if self.verbose:
+                        #print nm,pos_
+                        pass
+                    f.seek(pos_*2)
+                    ct = np.fromfile(f,dtype=np.uint16,count=1)
+                    ct_clip = np.clip(int(ct)+int(ct_), 0, 2**16-1).astype(np.uint16)
+                    f.seek(-2,1)
+                    f.write(ct_clip.tobytes())
+                    ints_vals.append(ct_clip)
+        f.close()
     def consume(self,sq,verbose=False):
         """Given a big sequence sq, this breaks in into all contigous subseqs of size <word> and records each occurence in self.ints"""
         word=self.word
@@ -94,26 +179,48 @@ class countTable():
     def get(self,seq,rc=False):
         """give an oligo, this breaks it into all contigous subseqs of size <word> and returns the sum of the counts"""
         word = self.word
-        if len(seq)<len(word):
+        if len(seq)<word:
             return 0
         seqs = [seq[i:i+word] for i in range(len(seq)-word+1)]
         if not rc:
             ints = np.array(map(seq2Int,seqs),dtype='uint64')
         else:
             ints = np.array(map(seq2Int_rc,seqs),dtype='uint64')
-        pos_col = ints/self.max_sparse_ind
-        pos_row = ints-pos_col*self.max_sparse_ind
-        return np.sum(self.matrix[pos_col,pos_row])
+            
 
-def OTmap(seqs,word_size=17,use_kmer=True,progress_report=False,save_file=None):
+        results = None
+        if self.fromfile:
+            #read from file
+            if self.f is None:
+                self.f = open(self.filename,'rb')
+            results_ = []
+            for int_ in ints:
+                self.f.seek(int_*2)
+                results_.append(np.fromfile(self.f,dtype=np.uint16,count=1))
+            results = np.sum(results_)
+            #self.f.close()
+            #self.f=None
+        else:
+            #read from RAM
+            if self.sparse:
+                pos_col = ints/self.max_sparse_ind
+                pos_row = ints-pos_col*self.max_sparse_ind
+                results = np.sum(self.matrix[pos_col,pos_row])
+            else:
+                results = np.sum(self.matrix[ints])
+        return results
+
+def OTmap(seqs,word_size=17,use_kmer=True,progress_report=False,save_file=None,sparse=True):
     """This creates an count table using either a sparse matrix form or a python dictionary.
     For large genome-sized tables we recommend the sparse matrix
     """
     if use_kmer:
-        map_ = countTable(word=word_size)
+        map_ = countTable(word=word_size,sparse=sparse)
         print "Mapping no. of seqs: "+str(len(seqs))
         for seq in seqs:
             map_.consume(seq.upper(),verbose=progress_report)
+        if len(seqs):
+            map_.complete()
         if save_file is not None:
             map_.save(save_file)
     else:
@@ -232,7 +339,32 @@ class pb_reports_class:
         #self.load_sequence_file_and_paramaters()
         #internalize paramaters in params_dic
         for key in self.params_dic.keys():
-            setattr(self,key,self.params_dic[key])    
+            setattr(self,key,self.params_dic[key])
+    def save_csv(self,name=None):
+        pb_rep = self.pb_reports_keep
+        csv_save = self.save_file
+        if csv_save is not None and len(pb_rep)>0:
+            csv_save = csv_save.replace('.pbr','.csv')
+            pbkeys = pb_rep.keys()
+            for key in pbkeys: pb_rep[key]['seq']=key
+            keys = pb_rep[pbkeys[0]].keys()
+            if name is not None:
+                for key in pbkeys:
+                    reg_name =  pb_rep[key]['reg_name']
+                    pb_rep[key]['name'] = pb_rep[key]['name'].replace(reg_name,name)
+            first_keys = ['seq','name']
+            keys = first_keys+list(np.setdiff1d(keys,first_keys))
+            pbinds = [pb_rep[key]['pb_index']for key in pbkeys]
+            pbregs = [pb_rep[key]['reg_index']for key in pbkeys]
+            pbkeys = np.array(pbkeys)[np.lexsort((pbregs,pbinds))]
+            header = ','.join(map(str,keys))
+            fid = open(csv_save,'w')
+            fid.write(header+'\n')
+
+            for pbkey in pbkeys:
+                line = ','.join([str(pb_rep[pbkey][key]).replace(',',';') for key in keys])
+                fid.write(line+'\n')
+            fid.close()  
     def save_pbr(self):
         "saves report file"
         dic_save = {"pb_reports":self.pb_reports,"pb_reports_keep":self.pb_reports_keep,
@@ -332,16 +464,16 @@ class pb_reports_class:
                 OTmaps = [OTmap(seq_,word_size=17,use_kmer=use_kmer,progress_report=False,save_file=save_file)
                           for seq_ in seqs]
                 setattr(self,map_key,OTmaps)
-            elif len(files_)==1 and self.check_extension(files,'.npz'):
-                OTMap_ = OTmap(seq_,word_size=17)
-                OTMap_.load(files_[0])
+            elif len(files_)==1 and self.check_extension(files,'npy'):
+                OTMap_ = countTable(word=17,sparse=False,save_file=files_[0])
+                OTMap_.load()
                 OTmaps = [OTMap_]
                 setattr(self,map_key,OTmaps)
             elif len(files_)==1 and self.check_extension(files,'pkl'):
                 OTmaps = [pickle.load(open(files_[0],'rb'))]
                 setattr(self,map_key,OTmaps)
             else:
-                print "Extension error or more than 1 npz/pkl file provided."
+                print "Extension error or more than 1 npy/pkl file provided."
         else:
             print "No files"
             setattr(self,map_key,[constant_zero_dict()])
@@ -460,19 +592,20 @@ class pb_reports_class:
                             #Iterate through block regions:
                             for j in range(pb_len-block+1):
                                 blk_t = pb_t[j:j+block]
-                                map_=maps[k%len(maps)]
                                 blks = [pb_t]
                                 if use_revc:
                                     blks.append(seqrc(pb_t))
                                 for blk_ in blks:
-                                    pb_reports[pb_t][key]+= int(map_.get(blk_int))
+                                    for map_ in maps:
+                                        pb_reports[pb_t][key]+= int(map_.get(blk_int))
                                     
                         #for sparse matrix:
                         if use_kmer:
-                            if use_revc:
-                                pb_reports[pb_t][key]+= map_.get(pb_t)+map_.get(pb_t,rc=True)
-                            else:
-                                pb_reports[pb_t][key]+= map_.get(pb_t)
+                            for map_ in maps:
+                                if use_revc:
+                                    pb_reports[pb_t][key]+= map_.get(pb_t)+map_.get(pb_t,rc=True)
+                                else:
+                                    pb_reports[pb_t][key]+= map_.get(pb_t)
                     if check_on_go:
                         if self.perform_check(pb_reports[pb_t]):
                             checks_[i:i+pb_len+buffer_len]=1

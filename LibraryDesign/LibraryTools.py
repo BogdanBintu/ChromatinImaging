@@ -570,6 +570,29 @@ def map_pair(nms_,sqs_,code,cts_icode,cts_vcode,tails,pair_limit_per_bit):
         sqs_new.append(up_down([l_seq,seqrc(sq),r_seq]))
         if min(cts_vcode)>=pair_limit_per_bit: break
     return nms_new,sqs_new
+def file_to_mat(file_,sep_str=',',d_type=None,skip_first=False):
+    """
+    Converts .csv files to a list of its entries
+    Inputs:
+    file_ - the location of a .csv file
+    sep_str - the separator between data points
+    d_type - the datatype in the file
+    skip_first - an option to skip the first component (e.g. if there's a menu)
+    Returns:
+    lines - a list of the lines in the file, each of which itself a list of all entries in the line
+    """
+    lines = [ln for ln in open(file_,'r')]
+    start_=(1 if skip_first==True else 0) #skip first line if option selected
+    def refine_line(ln,d_type=None,skip_first=False): #separates the data into its constituents
+        splits = ln[:-1].split(sep_str)
+        if d_type is None:
+            return [ln_ for ln_ in splits[start_:]]
+        if d_type=='int':
+            return [np.nan if ln_=='' else int(ln_) for ln_ in splits[start_:]]
+        if d_type=='float':
+            return [np.nan if ln_=='' else float(ln_) for ln_ in splits[start_:]]
+    lines = [refine_line(ln,d_type,skip_first) for ln in lines[start_:]]
+    return lines
 def map_gene(pairs_nms_,pairs_sqs_,code,tails,pair_limit_per_bit=10):
     """ Use as:
     map_gene([['name_pb-pair:[1,1]','name_pb-pair:[1,2]','name_pb-pair:[1,3]'],['name_pb-pair:[2,1]','name_pb-pair:[2,2]']],
