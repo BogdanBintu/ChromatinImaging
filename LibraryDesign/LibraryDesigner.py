@@ -574,42 +574,44 @@ class pb_reports_class:
             checks_ = np.zeros(len(reg_t))
             for i in range(len(reg_t)-pb_len):
                 pb_t = reg_t[i:i+pb_len]
-                if checks_[i]==0:
-                    pb_reports[pb_t] = constant_zero_dict()
-                    pb_reports[pb_t].update({'name':gen_names[k]+'_pb_'+str(i),'reg_index':k,'reg_name':gen_names[k],'pb_index':i,'gc':gc(pb_t),'tm':tm(pb_t)})
-                    
-                    #Iterate through maps:
-                    for key in self.map_dic.keys():
-                        curr_dic = self.map_dic[key]
-                        use_kmer = curr_dic.get('use_kmer',False)
-                        use_revc = curr_dic.get('use_revc',False)
-
-                        map_key = 'map_'+key
-                        maps=getattr(self,map_key)
+                pb_ts = [pb_t] if not input_use_revc else [pb_t,seqrc(pb_t)]
+                for pb_t in pb_ts:
+                    if checks_[i]==0:
+                        pb_reports[pb_t] = constant_zero_dict()
+                        pb_reports[pb_t].update({'name':gen_names[k]+'_pb_'+str(i),'reg_index':k,'reg_name':gen_names[k],'pb_index':i,'gc':gc(pb_t),'tm':tm(pb_t)})
                         
-                        #for python dictionary:
-                        if not use_kmer:
-                            #Iterate through block regions:
-                            for j in range(pb_len-block+1):
-                                blk_t = pb_t[j:j+block]
-                                blks = [pb_t]
-                                if use_revc:
-                                    blks.append(seqrc(pb_t))
-                                for blk_ in blks:
-                                    for map_ in maps:
-                                        pb_reports[pb_t][key]+= int(map_.get(blk_int))
-                                    
-                        #for sparse matrix:
-                        if use_kmer:
-                            for map_ in maps:
-                                if use_revc:
-                                    pb_reports[pb_t][key]+= map_.get(pb_t)+map_.get(pb_t,rc=True)
-                                else:
-                                    pb_reports[pb_t][key]+= map_.get(pb_t)
-                    if check_on_go:
-                        if self.perform_check(pb_reports[pb_t]):
-                            checks_[i:i+pb_len+buffer_len]=1
-                            self.pb_reports_keep[pb_t] = pb_reports[pb_t]
+                        #Iterate through maps:
+                        for key in self.map_dic.keys():
+                            curr_dic = self.map_dic[key]
+                            use_kmer = curr_dic.get('use_kmer',False)
+                            use_revc = curr_dic.get('use_revc',False)
+
+                            map_key = 'map_'+key
+                            maps=getattr(self,map_key)
+                            
+                            #for python dictionary:
+                            if not use_kmer:
+                                #Iterate through block regions:
+                                for j in range(pb_len-block+1):
+                                    blk_t = pb_t[j:j+block]
+                                    blks = [pb_t]
+                                    if use_revc:
+                                        blks.append(seqrc(pb_t))
+                                    for blk_ in blks:
+                                        for map_ in maps:
+                                            pb_reports[pb_t][key]+= int(map_.get(blk_int))
+                                        
+                            #for sparse matrix:
+                            if use_kmer:
+                                for map_ in maps:
+                                    if use_revc:
+                                        pb_reports[pb_t][key]+= map_.get(pb_t)+map_.get(pb_t,rc=True)
+                                    else:
+                                        pb_reports[pb_t][key]+= map_.get(pb_t)
+                        if check_on_go:
+                            if self.perform_check(pb_reports[pb_t]):
+                                checks_[i:i+pb_len+buffer_len]=1
+                                self.pb_reports_keep[pb_t] = pb_reports[pb_t]
             self.pb_reports = pb_reports
             self.save_pbr()
             end=time.time()
